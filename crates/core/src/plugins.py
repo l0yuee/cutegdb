@@ -912,6 +912,211 @@ class _SysinfoHook(FunctionHook):
         self.plugin.note("raised reported memory size")
 
 
+# --- timing normalizer (best-effort) ---------------------------------------
+@register
+class TimingNormalizer(Plugin):
+    """Feeds a smoothed monotonic clock to rdtsc/rdtscp and the clock syscalls.
+
+    Best-effort: the target no longer sees real time, so a debugger's slowdown
+    between two timestamps is hidden, but very large single-step delays elsewhere
+    still cost wall-clock time this cannot recover.
+    """
+
+    id = "timing_normalizer"
+    STEP = 1000  # virtual cycles / nanoseconds added per timing read
+
+    def install(self):
+        self.tsc = 1 << 32  # a plausible non-zero starting TSC
+        self.ns = 10 ** 9
+        sites = 0
+        if arch_name() in ("i386", "i386:x86-64"):
+            try:
+                self._arch = gdb.selected_frame().architecture()
+            except Exception:
+                self._arch = None
+            for start, end in _executable_ranges():
+                try:
+                    blob = read_mem(start, end - start)
+                except Exception:
+                    continue
+                for opcode, length, mnem in ((b"\x0f\x31", 2, "rdtsc"), (b"\x0f\x01\xf9", 3, "rdtscp")):
+                    i = blob.find(opcode)
+                    while i >= 0:
+                        addr = start + i
+                        if self._is(addr, mnem, length):
+                            self.track(_AddrBP(addr + length, self, self._tick))
+                            sites += 1
+                        i = blob.find(opcode, i + 1)
+        seen = set()
+        for cls, name in ((_ClockGettimeHook, "clock_gettime"), (_ClockGettimeHook, "__clock_gettime"),
+                          (_GettimeofdayHook, "gettimeofday")):
+            addr = symbol_addr(name)
+            if addr is None or addr in seen:
+                continue
+            hook = cls(self, name)
+            if hook.install():
+                seen.add(addr)
+                self.track(hook)
+        emit(self.id, "virtualized time at %d rdtsc site(s); the target no longer sees real time" % sites)
+
+    def _is(self, addr, mnem, length):
+        if self._arch is None:
+            return True
+        try:
+            insns = self._arch.disassemble(addr, count=1)
+        except Exception:
+            return False
+        return bool(insns) and insns[0]["length"] == length and insns[0]["asm"].split()[0] == mnem
+
+    def _tick(self):
+        self.tsc += self.STEP
+        set32("eax", self.tsc & 0xFFFFFFFF)
+        set32("edx", (self.tsc >> 32) & 0xFFFFFFFF)
+        self.count += 1
+
+    def advance_ns(self):
+        self.ns += self.STEP
+        self.count += 1
+        return self.ns
+
+
+class _ClockGettimeHook(FunctionHook):
+    def on_entry(self):
+        return arg(1)  # struct timespec *
+
+    def on_return(self, ts):
+        if not ts:
+            return
+        ns = self.plugin.advance_ns()
+        try:
+            write_mem(ts, (ns // 10 ** 9).to_bytes(8, "little") + (ns % 10 ** 9).to_bytes(8, "little"))
+        except Exception:
+            pass
+
+
+class _GettimeofdayHook(FunctionHook):
+    def on_entry(self):
+        return arg(0)  # struct timeval *
+
+    def on_return(self, tv):
+        if not tv:
+            return
+        ns = self.plugin.advance_ns()
+        try:
+            write_mem(tv, (ns // 10 ** 9).to_bytes(8, "little") + ((ns // 1000) % 10 ** 6).to_bytes(8, "little"))
+        except Exception:
+            pass
+
+
+# --- software-breakpoint cloak (best-effort) -------------------------------
+@register
+class SwbpCloak(Plugin):
+    """Restores original bytes when the target reads its own code via /proc/self/mem.
+
+    Best-effort: this defeats self-checksums that scan for 0xCC through the mem
+    file, but a checksum built from direct CPU reads cannot be intercepted; use
+    hardware breakpoints for complete stealth against those.
+    """
+
+    id = "swbp_cloak"
+
+    def install(self):
+        self.mem_fds = {}  # fd onto /proc/*/mem -> current read offset
+        self._seen = set()
+        opened = [self._add(_MemOpenHook(self, n)) for n in ("open", "open64", "openat", "openat64")]
+        self._add(_MemReadHook(self, "read"))
+        for n in ("pread", "pread64"):
+            self._add(_MemPreadHook(self, n))
+        for n in ("lseek", "lseek64"):
+            self._add(_MemSeekHook(self, n))
+        if not any(opened):
+            emit(self.id, "no open symbol; code self-reads are not hooked")
+        emit(self.id, "restoring code bytes on /proc/self/mem reads; use hardware breakpoints for full stealth")
+
+    def _add(self, hook):
+        addr = symbol_addr(hook.name)
+        if addr is None or addr in self._seen:
+            return False
+        if not hook.install():
+            return False
+        self._seen.add(addr)
+        self.track(hook)
+        return True
+
+    def teardown(self):
+        self.mem_fds = {}
+
+    def path_index(self, name):
+        return 1 if name.startswith("openat") else 0
+
+    def restore(self, buf, addr, count):
+        if count <= 0 or count > (1 << 20):
+            return
+        try:
+            current = read_mem(buf, count)   # the bytes the read syscall copied (may contain 0xCC)
+            original = read_mem(addr, count)  # gdb's view, with its breakpoints removed
+        except Exception:
+            return
+        if original != current:
+            write_mem(buf, original)
+            changed = sum(1 for a, b in zip(current, original) if a != b)
+            self.note("restored %d code byte(s) on a self-read" % changed)
+
+
+class _MemOpenHook(FunctionHook):
+    def on_entry(self):
+        path = read_cstr(arg(self.plugin.path_index(self.name)))
+        if path and b"/proc/" in path and path.endswith(b"/mem"):
+            return True
+        return None
+
+    def on_return(self, _ctx):
+        fd = _reg(_RET_REG.get(arch_name(), "rax"))
+        if fd < 0x80000000:
+            self.plugin.mem_fds[fd] = 0
+
+
+class _MemReadHook(FunctionHook):
+    def on_entry(self):
+        fd = arg(0)
+        if fd not in self.plugin.mem_fds:
+            return None
+        return (fd, arg(1), self.plugin.mem_fds[fd])  # (fd, buffer, offset)
+
+    def on_return(self, ctx):
+        fd, buf, offset = ctx
+        count = _reg(_RET_REG.get(arch_name(), "rax"))
+        if count <= 0 or count > (1 << 30):
+            return
+        self.plugin.restore(buf, offset, count)
+        self.plugin.mem_fds[fd] = offset + count
+
+
+class _MemPreadHook(FunctionHook):
+    def on_entry(self):
+        if arg(0) not in self.plugin.mem_fds:
+            return None
+        return (arg(1), arg(3))  # (buffer, file offset == virtual address)
+
+    def on_return(self, ctx):
+        buf, offset = ctx
+        count = _reg(_RET_REG.get(arch_name(), "rax"))
+        if count <= 0 or count > (1 << 30):
+            return
+        self.plugin.restore(buf, offset, count)
+
+
+class _MemSeekHook(FunctionHook):
+    def on_entry(self):
+        fd = arg(0)
+        return fd if fd in self.plugin.mem_fds else None
+
+    def on_return(self, fd):
+        new_offset = _reg(_RET_REG.get(arch_name(), "rax"))
+        if new_offset < (1 << 63):
+            self.plugin.mem_fds[fd] = new_offset
+
+
 # --- internal self-test plugin (hidden from the catalog) --------------------
 @register
 class _SelfTest(Plugin):
