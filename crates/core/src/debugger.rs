@@ -147,6 +147,8 @@ struct Inner {
     /// Set during internal step loops: intermediate stops update state without emitting events.
     quiet: bool,
     snapshot: Option<Arc<Snapshot>>,
+    /// Whether the `cutegdb` Python plugin namespace has been sourced into this gdb.
+    plugins_ready: bool,
 }
 
 pub struct Debugger {
@@ -1077,6 +1079,42 @@ impl Debugger {
             self.gdb.console(command).await?;
             Ok(None)
         }
+    }
+
+    /// Injects the `cutegdb` Python plugin namespace once per gdb lifetime.
+    async fn ensure_plugins(&self) -> Result<()> {
+        if self.inner.lock().unwrap().plugins_ready {
+            return Ok(());
+        }
+        self.gdb.execute_quiet(&crate::plugins::bootstrap_command()).await?;
+        self.inner.lock().unwrap().plugins_ready = true;
+        Ok(())
+    }
+
+    /// Installs exactly the listed anti-anti-debug / anti-anti-VM plugins for the current process,
+    /// removing any others. Call it again after each process starts, since a plugin's breakpoints
+    /// are bound to the inferior's addresses.
+    pub async fn set_active_plugins(&self, ids: &[String]) -> Result<()> {
+        self.ensure_plugins().await?;
+        let output = self.gdb.console_quiet(&crate::plugins::activate_command(ids)).await?;
+        let active = crate::plugins::parse_active(&output);
+        if active.is_empty() {
+            self.log("Countermeasures: none active");
+        } else {
+            let names: Vec<&str> =
+                active.iter().map(|id| crate::plugins::info(id).map_or(id.as_str(), |p| p.name)).collect();
+            self.log(format!("Countermeasures active: {}", names.join(", ")));
+        }
+        Ok(())
+    }
+
+    /// How many checks each active plugin has neutralized so far, for the status view.
+    pub async fn plugin_stats(&self) -> Result<Vec<(String, u64)>> {
+        if !self.inner.lock().unwrap().plugins_ready {
+            return Ok(Vec::new());
+        }
+        let output = self.gdb.console_quiet(crate::plugins::STATS_COMMAND).await?;
+        Ok(crate::plugins::parse_stats(&output))
     }
 
     fn require_paused(&self) -> Result<()> {
