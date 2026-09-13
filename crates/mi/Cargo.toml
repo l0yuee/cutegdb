@@ -1,0 +1,8 @@
+[package]
+name = "cutegdb-mi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+thiserror.workspace = true

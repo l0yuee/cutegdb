@@ -1,0 +1,2 @@
+[env]
+QMAKE = "/usr/bin/qmake6"

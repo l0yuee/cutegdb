@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/mi", "crates/core", "crates/cmd", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["process", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+thiserror = "2"

@@ -1,0 +1,8 @@
+[package]
+name = "cutegdb-cmd"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cutegdb-core = { path = "../core" }
+thiserror.workspace = true
