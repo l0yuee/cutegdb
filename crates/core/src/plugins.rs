@@ -89,8 +89,8 @@ pub fn catalog() -> &'static [PluginInfo] {
             name: "VM syscall cloak",
             category: AntiVm,
             best_effort: false,
-            description: "Normalizes uname, memory size, CPU count, disk size, hostname and \
-                          interface MACs reported through syscalls.",
+            description: "Normalizes uname, the hostname and the reported memory size so an \
+                          analysis VM looks like an ordinary workstation.",
         },
     ]
 }
