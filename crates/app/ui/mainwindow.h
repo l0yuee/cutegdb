@@ -28,6 +28,9 @@ public:
 private:
     void createTabs();
     void createMenus();
+    void createPluginsMenu();
+    void applyPluginSelection();
+    void showPluginStatus();
     void createCommandBar();
     void createStatusBar();
     QAction* addAction(QMenu* menu, const QString& text, const char* shortcutId);
@@ -66,6 +69,7 @@ private:
     QLineEdit* m_command;
     QLabel* m_stateLabel;
     QLabel* m_messageLabel;
+    QList<class QAction*> m_pluginActions;
     QString m_gdbVersion;
     QString m_pendingExecutable;
 };

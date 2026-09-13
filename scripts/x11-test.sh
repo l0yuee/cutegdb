@@ -82,6 +82,27 @@ wait_log "[action] Run"
 wait_log '"entry breakpoint" at <hello.EntryPoint>'
 shot entry.png
 
+# Plugins menu: enable a countermeasure while paused and confirm it is applied.
+mark; $KEY Alt_L+p
+sleep 0.4
+$KEY Down
+sleep 0.2
+$KEY Return   # open the first (Anti-anti-debug) submenu
+sleep 0.3
+$KEY Return   # toggle its first plugin
+wait_log "[action] Plugins"
+wait_log "Countermeasures active"
+shot plugins.png
+# Plugin status dialog (Plugins -> Plugin status...).
+mark; $KEY Alt_L+p
+sleep 0.4
+$KEY s
+sleep 0.6
+PLUGINDLG=$(xdotool search --onlyvisible --name "^Plugin status$" | head -1)
+[ -n "$PLUGINDLG" ] && import -window "$PLUGINDLG" "$OUT/plugin-status.png"
+$KEY Escape
+sleep 0.3
+
 mark; command_bar "bp add"
 wait_log "set!"
 mark; $KEY F9

@@ -13,7 +13,8 @@ use std::time::Duration;
 use cutegdb_core::{
     Arch, BreakpointKind, Database, DebugError, DebugEvent, DebugState, Debugger, Disassembler, FileHandle, Frame,
     InfoContext, InsnKind, Instruction, Mapping, ModuleAddress, PAGE_SIZE, Pattern, RegValue, SignalInfo, Snapshot,
-    SymbolTable, ThreadInfo, TraceOptions, WatchAccess, EdgeKind, build_graph, describe_instruction, format_operands,
+    SymbolTable, ThreadInfo, TraceOptions, WatchAccess, EdgeKind, PluginCategory, StopReason, build_graph,
+    describe_instruction, format_operands, plugin_catalog,
 };
 use cutegdb_mi::GdbOptions;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
@@ -177,6 +178,22 @@ pub mod qobject {
         text: String,
         edge_targets: Vec<u64>,
         edge_kinds: Vec<u8>,
+    }
+
+    /// A built-in countermeasure plugin; category is 0 for anti-anti-debug, 1 for anti-anti-VM.
+    struct PluginRow {
+        id: String,
+        name: String,
+        category: i32,
+        best_effort: bool,
+        description: String,
+    }
+
+    /// How many checks an active plugin has neutralized.
+    struct PluginStatRow {
+        id: String,
+        name: String,
+        count: u64,
     }
 
     unsafe extern "RustQt" {
@@ -405,6 +422,27 @@ pub mod qobject {
         #[cxx_name = "executePython"]
         fn execute_python(self: Pin<&mut Self>, code: &QString);
 
+        /// The built-in anti-anti-debug / anti-anti-VM plugins, for the Plugins menu.
+        #[cxx_name = "pluginCatalog"]
+        fn plugin_catalog(self: &Self) -> Vec<PluginRow>;
+
+        /// Sets which plugins are enabled (comma-separated ids); applies them at once when paused,
+        /// and automatically each time a new process reaches its entry point / is attached.
+        #[qinvokable]
+        #[cxx_name = "setEnabledPlugins"]
+        fn set_enabled_plugins(self: Pin<&mut Self>, ids: &QString);
+
+        #[qsignal]
+        #[cxx_name = "pluginStatsChanged"]
+        fn plugin_stats_changed(self: Pin<&mut Self>);
+
+        #[qinvokable]
+        #[cxx_name = "refreshPluginStats"]
+        fn refresh_plugin_stats(self: Pin<&mut Self>);
+
+        #[cxx_name = "pluginStatRows"]
+        fn plugin_stat_rows(self: &Self) -> Vec<PluginStatRow>;
+
         #[qinvokable]
         fn start(self: Pin<&mut Self>);
 
@@ -504,8 +542,8 @@ pub mod qobject {
 }
 
 use qobject::{
-    AnnotationRow, BreakpointRow, DisasmRow, FrameRow, GraphBlock, HandleRow, MapRow, ModuleRow, PatchRow, ProcessRow,
-    ReferenceRow, RegisterRow, SignalRow, StackRow, SymbolRow, ThreadRow, TraceRow,
+    AnnotationRow, BreakpointRow, DisasmRow, FrameRow, GraphBlock, HandleRow, MapRow, ModuleRow, PatchRow, PluginRow,
+    PluginStatRow, ProcessRow, ReferenceRow, RegisterRow, SignalRow, StackRow, SymbolRow, ThreadRow, TraceRow,
 };
 
 const VIEW_DISASSEMBLY: i32 = 0;
@@ -525,6 +563,10 @@ pub struct DebugSessionRust {
     script: Arc<Mutex<Option<Script>>>,
     script_running: Arc<AtomicBool>,
     script_abort: Arc<AtomicBool>,
+    /// Plugin ids the user has enabled; re-applied on each new process.
+    enabled_plugins: Arc<Mutex<Vec<String>>>,
+    /// Last queried per-plugin neutralization counts, for the status dialog.
+    plugin_stats: Arc<Mutex<Vec<(String, u64)>>>,
 }
 
 /// Results shown in the References view: address and info text.
@@ -548,6 +590,8 @@ impl Default for DebugSessionRust {
             script: Arc::default(),
             script_running: Arc::default(),
             script_abort: Arc::default(),
+            enabled_plugins: Arc::default(),
+            plugin_stats: Arc::default(),
         }
     }
 }
@@ -612,6 +656,7 @@ impl qobject::DebugSession {
     fn start(self: Pin<&mut Self>) {
         let thread = self.qt_thread();
         let views = self.rust().views.clone();
+        let enabled_plugins = self.rust().enabled_plugins.clone();
         self.rust().runtime.spawn(async move {
             let (debugger, mut events) = match Debugger::spawn(GdbOptions::default()).await {
                 Ok(pair) => pair,
@@ -632,8 +677,24 @@ impl qobject::DebugSession {
             });
             while let Some(event) = events.recv().await {
                 match &event {
-                    DebugEvent::Paused(_) => {
+                    DebugEvent::Paused(snapshot) => {
                         tokio::spawn(refresh_views(debugger.clone(), views.clone(), thread.clone()));
+                        // A new process is now stopped with libc mapped but its own code not run:
+                        // install the user's enabled countermeasures before it continues.
+                        if matches!(
+                            snapshot.reason,
+                            StopReason::EntryBreakpoint | StopReason::Attach | StopReason::Connected
+                        ) {
+                            let ids = enabled_plugins.lock().unwrap().clone();
+                            if !ids.is_empty() {
+                                let (debugger, thread) = (debugger.clone(), thread.clone());
+                                tokio::spawn(async move {
+                                    if let Err(e) = debugger.set_active_plugins(&ids).await {
+                                        log_later(&thread, format!("Failed to apply plugins: {e}"));
+                                    }
+                                });
+                            }
+                        }
                     }
                     DebugEvent::State(DebugState::Terminated) => {
                         {
@@ -1443,6 +1504,66 @@ impl qobject::DebugSession {
     fn execute_python(self: Pin<&mut Self>, code: &QString) {
         let code = code.to_string();
         self.spawn_action(move |d| async move { d.execute_user_command(&format!("python {code}")).await.map(|_| ()) });
+    }
+
+    fn plugin_catalog(&self) -> Vec<PluginRow> {
+        plugin_catalog()
+            .iter()
+            .map(|p| PluginRow {
+                id: p.id.to_owned(),
+                name: p.name.to_owned(),
+                category: match p.category {
+                    PluginCategory::AntiDebug => 0,
+                    PluginCategory::AntiVm => 1,
+                },
+                best_effort: p.best_effort,
+                description: p.description.to_owned(),
+            })
+            .collect()
+    }
+
+    fn set_enabled_plugins(self: Pin<&mut Self>, ids: &QString) {
+        let ids: Vec<String> = ids.to_string().split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+        *self.rust().enabled_plugins.lock().unwrap() = ids.clone();
+        // Apply immediately when a process is already stopped; otherwise it happens at the next start.
+        let live = self.debug_state() != state_code(DebugState::NoTarget)
+            && self.debug_state() != state_code(DebugState::Terminated);
+        if live
+            && let Some(debugger) = self.rust().debugger.clone()
+        {
+            let thread = self.qt_thread();
+            self.rust().runtime.spawn(async move {
+                if let Err(e) = debugger.set_active_plugins(&ids).await {
+                    log_later(&thread, format!("Failed to apply plugins: {e}"));
+                }
+            });
+        }
+    }
+
+    fn refresh_plugin_stats(self: Pin<&mut Self>) {
+        let thread = self.qt_thread();
+        let Some(debugger) = self.rust().debugger.clone() else { return };
+        let store = self.rust().plugin_stats.clone();
+        self.rust().runtime.spawn(async move {
+            if let Ok(stats) = debugger.plugin_stats().await {
+                *store.lock().unwrap() = stats;
+                let _ = thread.queue(|obj| obj.plugin_stats_changed());
+            }
+        });
+    }
+
+    fn plugin_stat_rows(&self) -> Vec<PluginStatRow> {
+        self.rust()
+            .plugin_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, count)| PluginStatRow {
+                id: id.clone(),
+                name: cutegdb_core::plugin_info(id).map_or_else(|| id.clone(), |p| p.name.to_owned()),
+                count: *count,
+            })
+            .collect()
     }
 
     fn attach(self: Pin<&mut Self>, pid: u32) {

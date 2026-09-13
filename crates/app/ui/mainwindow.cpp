@@ -25,6 +25,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
+#include <QMenu>
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QStatusBar>
@@ -290,10 +291,88 @@ void MainWindow::createMenus()
         [this] { showTraceDialog(false); });
     connect(addAction(tracing, tr("Trace &over..."), "DebugTraceOverConditional"), &QAction::triggered, this,
         [this] { showTraceDialog(true); });
-    menuBar()->addMenu(tr("&Plugins"));
+    createPluginsMenu();
     menuBar()->addMenu(tr("Favourites"));
     menuBar()->addMenu(tr("&Options"));
     menuBar()->addMenu(tr("&Help"));
+}
+
+void MainWindow::createPluginsMenu()
+{
+    QMenu* menu = menuBar()->addMenu(tr("&Plugins"));
+    const QStringList enabled = QSettings().value(QStringLiteral("plugins/enabled")).toStringList();
+
+    QMenu* categories[2] = {menu->addMenu(tr("Anti-anti-&debug")), menu->addMenu(tr("Anti-anti-&VM"))};
+    for (const PluginRow& row : m_session->pluginCatalog()) {
+        QMenu* parent = categories[row.category == 1 ? 1 : 0];
+        QString label = qs(row.name);
+        if (row.best_effort)
+            label += tr(" (best-effort)");
+        QAction* action = parent->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(enabled.contains(qs(row.id)));
+        action->setToolTip(qs(row.description));
+        action->setData(qs(row.id));
+        connect(action, &QAction::toggled, this, [this] { applyPluginSelection(); });
+        m_pluginActions << action;
+    }
+    for (QMenu* category : categories) {
+        category->setToolTipsVisible(true);
+        category->addSeparator();
+        connect(category->addAction(tr("Enable all")), &QAction::triggered, this, [category] {
+            for (QAction* a : category->actions())
+                if (a->isCheckable())
+                    a->setChecked(true);
+        });
+        connect(category->addAction(tr("Disable all")), &QAction::triggered, this, [category] {
+            for (QAction* a : category->actions())
+                if (a->isCheckable())
+                    a->setChecked(false);
+        });
+    }
+    menu->addSeparator();
+    connect(menu->addAction(tr("Plugin &status...")), &QAction::triggered, this, &MainWindow::showPluginStatus);
+
+    // Hand the restored selection to the core so it is auto-applied when a target starts.
+    applyPluginSelection();
+}
+
+void MainWindow::applyPluginSelection()
+{
+    QStringList ids;
+    for (QAction* action : m_pluginActions)
+        if (action->isChecked())
+            ids << action->data().toString();
+    QSettings().setValue(QStringLiteral("plugins/enabled"), ids);
+    traceAction("Plugins");
+    m_session->setEnabledPlugins(ids.join(QLatin1Char(',')));
+}
+
+void MainWindow::showPluginStatus()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Plugin status"));
+    auto* table = new TableView({tr("Countermeasure"), tr("Checks neutralized")});
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Active countermeasures and how many checks each has neutralized:")));
+    layout->addWidget(table);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto refresh = [this, table] {
+        QList<QStringList> rows;
+        for (const PluginStatRow& row : m_session->pluginStatRows())
+            rows << QStringList{qs(row.name), QString::number(row.count)};
+        if (rows.isEmpty())
+            rows << QStringList{tr("(no countermeasures active)"), QString()};
+        table->setRows(rows, QList<std::uint64_t>{});
+    };
+    connect(m_session, &DebugSession::pluginStatsChanged, &dialog, refresh);
+    m_session->refreshPluginStats();
+    refresh();
+    dialog.resize(440, 320);
+    dialog.exec();
 }
 
 void MainWindow::createCommandBar()
