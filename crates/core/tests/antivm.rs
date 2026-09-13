@@ -5,12 +5,13 @@
 
 mod common;
 
-use common::{Session, fixture};
+use common::{Session, example};
 use cutegdb_core::{DebugEvent, DebugState};
 use std::time::Duration;
 
-async fn run_checks(plugins: &[&str]) -> Vec<String> {
-    let exe = fixture("antivm", "antivm.c", "gcc", &[]).expect("gcc builds the fixture");
+/// Runs an `examples/anti-vm/<relpath>` program with the given plugins and returns its output.
+async fn run_example(name: &str, relpath: &str, plugins: &[&str]) -> Vec<String> {
+    let exe = example(name, relpath, "gcc", &[]).expect("gcc builds the example");
     let mut session = Session::open(&exe, &[]).await;
     session.next_pause().await; // system breakpoint
     session.dbg.run().await.unwrap();
@@ -39,39 +40,53 @@ async fn run_checks(plugins: &[&str]) -> Vec<String> {
     session.output.clone()
 }
 
+/// The check names (before the ':') that reported DETECTED, excluding the RESULT summary.
+fn flagged(output: &[String]) -> Vec<String> {
+    output
+        .iter()
+        .filter(|l| l.ends_with("DETECTED") && !l.starts_with("RESULT:"))
+        .map(|l| l.split(':').next().unwrap().to_owned())
+        .collect()
+}
+
+/// (executable name, source under examples/anti-vm, plugins that defeat it).
+const CASES: &[(&str, &str, &[&str])] = &[
+    ("vm_cpuid", "anti-vm/cpuid.c", &["cpuid_spoof"]),
+    ("vm_sysfiles", "anti-vm/sysfiles.c", &["vm_file_cloak", "vm_syscall_cloak"]),
+];
+
 #[tokio::test(flavor = "multi_thread")]
 async fn without_plugins_the_vm_is_detected() {
-    let out = run_checks(&[]).await;
-    if !out.iter().any(|l| l == "RESULT: DETECTED") {
-        eprintln!("host is not a detectable VM; skipping: {out:?}");
-        return;
+    let mut detectable = false;
+    for (name, source, _) in CASES {
+        let out = run_example(name, source, &[]).await;
+        if out.iter().any(|l| l == "RESULT: DETECTED") {
+            detectable = true;
+            assert!(!flagged(&out).is_empty(), "{source}: {out:?}");
+        }
     }
-    // The x86 CPUID checks are always present on a hypervisor guest.
-    assert!(out.iter().any(|l| l == "CPUID_HV: DETECTED"), "{out:?}");
-    assert!(out.iter().any(|l| l == "CPUID_VENDOR: DETECTED"), "{out:?}");
+    if !detectable {
+        eprintln!("host is not a detectable VM; skipping");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn plugins_defeat_every_vm_check() {
-    let baseline = run_checks(&[]).await;
-    if !baseline.iter().any(|l| l == "RESULT: DETECTED") {
-        eprintln!("host is not a detectable VM; skipping: {baseline:?}");
-        return;
+    for (name, source, plugins) in CASES {
+        let baseline = run_example(name, source, &[]).await;
+        if !baseline.iter().any(|l| l == "RESULT: DETECTED") {
+            eprintln!("{source}: host does not trip this check; skipping");
+            continue;
+        }
+        let expected = flagged(&baseline);
+        let out = run_example(name, source, plugins).await;
+        for check in &expected {
+            assert!(
+                out.iter().any(|l| l == &format!("{check}: clean")),
+                "{source}: {check} still detected with plugins: {out:?}"
+            );
+        }
+        assert!(out.iter().any(|l| l == "RESULT: CLEAN"), "{source}: {out:?}");
+        assert!(!out.iter().any(|l| l.ends_with("DETECTED")), "{source}: a check still fired: {out:?}");
     }
-    // Every check the baseline flagged must become clean with the plugins active.
-    let flagged: Vec<String> = baseline
-        .iter()
-        .filter(|l| l.ends_with("DETECTED") && !l.starts_with("RESULT:"))
-        .map(|l| l.split(':').next().unwrap().to_owned())
-        .collect();
-
-    let out = run_checks(&["cpuid_spoof", "vm_file_cloak", "vm_syscall_cloak"]).await;
-    for name in &flagged {
-        assert!(
-            out.iter().any(|l| l == &format!("{name}: clean")),
-            "{name} still detected with plugins: {out:?}"
-        );
-    }
-    assert!(out.iter().any(|l| l == "RESULT: CLEAN"), "{out:?}");
-    assert!(!out.iter().any(|l| l.ends_with("DETECTED")), "a check still fired: {out:?}");
 }

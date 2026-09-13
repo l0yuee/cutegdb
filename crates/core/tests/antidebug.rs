@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{Session, fixture};
+use common::{Session, example};
 use cutegdb_core::{DebugEvent, DebugState};
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 /// Plugins are installed at the entry breakpoint, where the loader has already mapped libc (so its
 /// symbols resolve) but the program's own code has not run yet.
 async fn run_checks(plugins: &[&str]) -> Vec<String> {
-    let exe = fixture("antidebug", "antidebug.c", "gcc", &[]).expect("gcc builds the fixture");
+    let exe = example("antidebug", "anti-debug/antidebug.c", "gcc", &[]).expect("gcc builds the example");
     let mut session = Session::open(&exe, &[]).await;
     session.next_pause().await; // system breakpoint
     session.dbg.run().await.unwrap();

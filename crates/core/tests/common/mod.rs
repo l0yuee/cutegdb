@@ -16,11 +16,23 @@ pub const TIMEOUT: Duration = Duration::from_secs(20);
 /// A per-process directory keeps concurrently running test binaries from overwriting each other's
 /// fixtures while leaving file (and therefore module) names unchanged.
 pub fn fixture(name: &str, source: &str, compiler: &str, flags: &[&str]) -> Option<PathBuf> {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(source);
+    build(name, &workspace_path("tests/fixtures").join(source), compiler, flags)
+}
+
+/// Builds an anti-debug / anti-VM example program from `examples/<relpath>`.
+pub fn example(name: &str, relpath: &str, compiler: &str, flags: &[&str]) -> Option<PathBuf> {
+    build(name, &workspace_path("examples").join(relpath), compiler, flags)
+}
+
+fn workspace_path(sub: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(sub)
+}
+
+fn build(name: &str, src: &Path, compiler: &str, flags: &[&str]) -> Option<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("fixtures-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join(name);
-    let status = Command::new(compiler).args(["-g", "-O0"]).args(flags).arg("-o").arg(&out).arg(&src).status().ok()?;
+    let status = Command::new(compiler).args(["-g", "-O0"]).args(flags).arg("-o").arg(&out).arg(src).status().ok()?;
     assert!(status.success(), "{compiler} failed to build {name}");
     Some(out)
 }

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Session, fixture};
+use common::{Session, example};
 use cutegdb_core::{DebugEvent, DebugState};
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ async fn drive_to_exit(session: &mut Session) -> Vec<String> {
 }
 
 async fn open_at_entry(name: &str, source: &str) -> Session {
-    let exe = fixture(name, source, "gcc", &[]).expect("gcc builds the fixture");
+    let exe = example(name, source, "gcc", &[]).expect("gcc builds the example");
     let mut session = Session::open(&exe, &[]).await;
     session.next_pause().await; // system breakpoint
     session.dbg.run().await.unwrap();
@@ -41,13 +41,13 @@ async fn open_at_entry(name: &str, source: &str) -> Session {
 #[tokio::test(flavor = "multi_thread")]
 async fn timing_normalizer_hides_the_pause() {
     // Baseline: the 100 ms sleeps make both deltas look like a debugger paused the process.
-    let mut session = open_at_entry("timing_off", "timing.c").await;
+    let mut session = open_at_entry("timing_off", "anti-debug/timing.c").await;
     let out = drive_to_exit(&mut session).await;
     assert!(out.iter().any(|l| l == "RDTSC: DETECTED"), "{out:?}");
     assert!(out.iter().any(|l| l == "CLOCK: DETECTED"), "{out:?}");
 
     // With the plugin, both timestamp sources advance by a small fixed step.
-    let mut session = open_at_entry("timing_on", "timing.c").await;
+    let mut session = open_at_entry("timing_on", "anti-debug/timing.c").await;
     session.dbg.set_active_plugins(&["timing_normalizer".into()]).await.unwrap();
     let out = drive_to_exit(&mut session).await;
     assert!(out.iter().any(|l| l == "RDTSC: clean"), "rdtsc not smoothed: {out:?}");
@@ -58,13 +58,13 @@ async fn timing_normalizer_hides_the_pause() {
 #[tokio::test(flavor = "multi_thread")]
 async fn swbp_cloak_restores_code_bytes() {
     // A software breakpoint at `marker` leaves 0xCC where the program reads its own code.
-    let mut session = open_at_entry("selfmod_off", "selfmod.c").await;
+    let mut session = open_at_entry("selfmod_off", "anti-debug/selfmod.c").await;
     session.dbg.execute_user_command("break marker").await.unwrap();
     let out = drive_to_exit(&mut session).await;
     assert!(out.iter().any(|l| l == "SWBP: DETECTED"), "breakpoint byte not seen: {out:?}");
 
     // With the cloak, the self-read sees the original bytes.
-    let mut session = open_at_entry("selfmod_on", "selfmod.c").await;
+    let mut session = open_at_entry("selfmod_on", "anti-debug/selfmod.c").await;
     session.dbg.execute_user_command("break marker").await.unwrap();
     session.dbg.set_active_plugins(&["swbp_cloak".into()]).await.unwrap();
     let out = drive_to_exit(&mut session).await;

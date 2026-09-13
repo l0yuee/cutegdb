@@ -36,8 +36,10 @@ static int parent_detected(void) {
 
 int main(void) {
     int bad = 0;
-    printf("TRACEME: %s\n", traceme_detected() ? (bad = 1, "DETECTED") : "clean");
+    // TracerPid is read before the self-ptrace below, which would otherwise make this
+    // process traced by its own parent and trip the check on its own.
     printf("TRACERPID: %s\n", tracerpid_detected() ? (bad = 1, "DETECTED") : "clean");
+    printf("TRACEME: %s\n", traceme_detected() ? (bad = 1, "DETECTED") : "clean");
     printf("PARENT: %s\n", parent_detected() ? (bad = 1, "DETECTED") : "clean");
     printf("RESULT: %s\n", bad ? "DETECTED" : "CLEAN");
     fflush(stdout);
