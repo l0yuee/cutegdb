@@ -9,6 +9,8 @@ drives GDB/MI underneath so it debugs everything GDB does — and adds built-in
 
 ---
 
+![The cutegdb CPU view debugging the anti-VM CPUID example, with the CPUID-spoof countermeasure active](docs/images/cpu-view.png)
+
 ## Features
 
 - **x64dbg-style CPU view** — synchronized disassembly, registers, stack and
@@ -51,7 +53,11 @@ and re-applied automatically each time a process starts or you attach.
 from single-stepping, or checksums built from direct CPU reads).
 
 Working example programs for every technique live in [`examples/`](examples/),
-and they double as the integration-test corpus.
+and they double as the integration-test corpus. Below, the `anti-vm/cpuid`
+example runs with **CPUID spoof** enabled — the plugin clears the hypervisor
+markers and every check reports `clean`:
+
+![The Log tab showing the anti-VM CPUID example reporting clean with the CPUID-spoof plugin active](docs/images/plugins-log.png)
 
 ## Requirements
 

@@ -8,6 +8,8 @@ x64dbg 的界面布局、快捷键与操作逻辑，底层通过 GDB/MI 驱动�
 
 ---
 
+![cutegdb 的 CPU 视图正在调试反虚拟机 CPUID 示例，且已启用 CPUID spoof 对抗功能](docs/images/cpu-view.png)
+
 ## 功能特性
 
 - **x64dbg 风格的 CPU 视图** —— 联动的反汇编、寄存器、栈与内存转储，信息框、跳转箭头，
@@ -46,7 +48,11 @@ x64dbg 的界面布局、快捷键与操作逻辑，底层通过 GDB/MI 驱动�
 ⚠ = 尽力而为：会在日志中记录哪些能完全隐藏、哪些不能（例如单步带来的时间开销，或直接由 CPU
 读取构造的校验和）。
 
-覆盖每种技术的可运行示例程序位于 [`examples/`](examples/)，它们同时也是集成测试用例。
+覆盖每种技术的可运行示例程序位于 [`examples/`](examples/)，它们同时也是集成测试用例。下图中，
+`anti-vm/cpuid` 示例在启用 **CPUID spoof** 后运行——该插件清除了 hypervisor 标志，每一项检测
+都报告为 `clean`：
+
+![Log 标签页显示反虚拟机 CPUID 示例在启用 CPUID-spoof 插件后全部报告 clean](docs/images/plugins-log.png)
 
 ## 环境要求
 

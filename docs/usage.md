@@ -101,7 +101,9 @@ each has neutralized so far.
 Each plugin injects a small GDB Python module that installs silent breakpoints —
 they patch the debuggee's view of the world and resume without ever surfacing a
 stop, so they never interfere with your own breakpoints or stepping. Activity is
-written to the Log (`[cutegdb-plugin] …`).
+written to the Log (`[cutegdb-plugin] …`):
+
+![The Log tab: the anti-VM CPUID example reports clean with CPUID spoof active](images/plugins-log.png)
 
 ### The plugins
 
@@ -154,3 +156,6 @@ cargo clippy --workspace --all-targets
 
 The anti-VM integration tests only assert detection→clean when the host is a
 hypervisor guest; on bare metal they skip with a message.
+
+- **Screenshots**: `scripts/screenshots.sh` regenerates the images in this guide
+  by driving cutegdb on the `anti-vm/cpuid` example with the plugin enabled.

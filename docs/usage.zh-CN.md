@@ -86,7 +86,9 @@ cutegdb 采用 x64dbg 的默认快捷键，最常用的有：
 
 每个插件会注入一小段 GDB Python 模块，安装“静默断点”——它们修改被调试程序看到的世界并直接
 继续执行，从不向界面报告一次停止，因此不会干扰你自己的断点或单步。活动会写入日志
-（`[cutegdb-plugin] …`）。
+（`[cutegdb-plugin] …`）：
+
+![Log 标签页：反虚拟机 CPUID 示例在启用 CPUID spoof 后全部报告 clean](images/plugins-log.png)
 
 ### 各插件
 
@@ -133,3 +135,6 @@ cargo clippy --workspace --all-targets
   发送按键，并在屏幕锁定时自动跳过。
 
 反虚拟机集成测试仅在宿主为虚拟机来宾时断言“检测→clean”；在裸机上会跳过并打印提示。
+
+- **截图**：`scripts/screenshots.sh` 会通过在 `anti-vm/cpuid` 示例上启用插件来驱动 cutegdb，
+  重新生成本文档中的图片。
