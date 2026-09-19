@@ -8,6 +8,7 @@ mod debugger;
 mod disasm;
 mod format;
 mod graph;
+mod ida_sync;
 mod insn_info;
 mod inspect;
 mod memory;
@@ -26,6 +27,7 @@ pub use debugger::{DebugError, DebugEvent, DebugState, Debugger, Snapshot, StopR
 pub use disasm::{Disassembler, InsnKind, Instruction, Reference, ReferenceKind};
 pub use format::format_operands;
 pub use graph::{Block, EdgeKind, FunctionGraph, build_graph};
+pub use ida_sync::{RetSyncClient, RetSyncConfig};
 pub use insn_info::{InfoContext, describe_instruction, jump_taken};
 pub use inspect::{FileHandle, Frame, SignalInfo, ThreadInfo, parse_frames, parse_process_id, parse_signals, parse_threads};
 pub use memory::{MemoryCache, PAGE_SIZE};

@@ -28,6 +28,9 @@ x64dbg 的界面布局、快捷键与操作逻辑，底层通过 GDB/MI 驱动�
 - **双模式命令栏** —— 输入 x64dbg 命令（翻译为 GDB）或原始 GDB 命令；下拉框可切换到
   Python 单行执行。
 - **反反调试 / 反反虚拟机插件** —— 见下文。
+- **IDA Pro 同步** —— 兼容 [ret-sync](https://github.com/bootleg/ret-sync) 的插件，
+  将调试器镜像到正在运行的 IDA Pro（光标、当前行高亮与断点），并让 IDA 的快捷键反向驱动
+  调试器。
 
 ## 反反调试与反反虚拟机
 
@@ -53,6 +56,23 @@ x64dbg 的界面布局、快捷键与操作逻辑，底层通过 GDB/MI 驱动�
 都报告为 `clean`：
 
 ![Log 标签页显示反虚拟机 CPUID 示例在启用 CPUID-spoof 插件后全部报告 clean](docs/images/plugins-log.png)
+
+## IDA Pro 同步
+
+当你在 cutegdb 和 IDA Pro 中研究同一个二进制文件时，**IDA Pro 同步** 插件让两者保持一致。
+它使用 [ret-sync](https://github.com/bootleg/ret-sync) 协议，因此直接驱动 **官方 ret-sync
+IDA 插件**——IDA 一侧无需安装任何额外东西。
+
+- **调试器 → IDA** —— cutegdb 每次暂停（单步、步入/步过、执行到返回、命中断点、跳转、跟踪
+  结束……）时，IDA 都会跳转到同一条指令并高亮。步过或执行到返回只在最终指令处同步一次，因此
+  IDA 不会在中间步骤间闪烁。在 cutegdb 中设置的断点也会在 IDA 中标记。
+- **IDA → 调试器** —— ret-sync 在 IDA 中的快捷键可反向驱动 cutegdb：单步（F10）、跟踪
+  （F11）、继续（Alt-F5），以及在光标处设置普通/一次性/硬件断点（F2 / F3 / Ctrl-F2）。
+
+地址由 IDA 一侧自动重定位，因此 ASLR/PIE 与共享库都能直接工作。在 **Plugins（插件）→
+Debugger integration（调试器集成）→ IDA Pro sync** 中启用，选择会跨会话记忆。若 IDA 在
+另一台机器上（或使用非默认端口），可通过 `~/.sync` 或环境变量 `CUTEGDB_RETSYNC` 配置——
+详见[使用文档](docs/usage.zh-CN.md#8-ida-pro-同步ret-sync)。
 
 ## 环境要求
 

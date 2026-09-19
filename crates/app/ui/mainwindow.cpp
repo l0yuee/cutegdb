@@ -302,9 +302,10 @@ void MainWindow::createPluginsMenu()
     QMenu* menu = menuBar()->addMenu(tr("&Plugins"));
     const QStringList enabled = QSettings().value(QStringLiteral("plugins/enabled")).toStringList();
 
-    QMenu* categories[2] = {menu->addMenu(tr("Anti-anti-&debug")), menu->addMenu(tr("Anti-anti-&VM"))};
+    QMenu* categories[3] = {menu->addMenu(tr("Anti-anti-&debug")), menu->addMenu(tr("Anti-anti-&VM")),
+                            menu->addMenu(tr("Debugger &integration"))};
     for (const PluginRow& row : m_session->pluginCatalog()) {
-        QMenu* parent = categories[row.category == 1 ? 1 : 0];
+        QMenu* parent = categories[(row.category >= 0 && row.category <= 2) ? row.category : 0];
         QString label = qs(row.name);
         if (row.best_effort)
             label += tr(" (best-effort)");

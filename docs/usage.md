@@ -126,7 +126,73 @@ written to the Log (`[cutegdb-plugin] …`):
 - The two best-effort plugins are marked ⚠ in the menu and log what they could
   not fully hide.
 
-## 8. Examples
+## 8. IDA Pro sync (ret-sync)
+
+The **IDA Pro sync** plugin keeps a live IDA Pro session in step with the
+debugger. It is a [ret-sync](https://github.com/bootleg/ret-sync) *debugger
+client*, so it talks to the **stock ret-sync IDA plugin** — nothing extra is
+installed on the IDA side, and the same dispatcher works for a local or remote
+IDA.
+
+### Set-up
+
+1. In IDA, install ret-sync as usual and open your IDB for the target. Start it
+   (Alt-Shift-S) and enable syncing (Ctrl-Shift-S) so its dispatcher is
+   listening. IDA matches the debugger to the right IDB by the module's file
+   name; if the IDB name differs, use ret-sync's *Overwrite idb name* / `.sync`
+   `[ALIASES]`.
+2. In cutegdb, tick **Plugins → Debugger integration → IDA Pro sync**. The
+   choice is saved and re-enabled on the next launch.
+3. Load and run the target. As soon as it pauses, IDA's cursor jumps to the
+   current instruction.
+
+### What syncs
+
+- **Debugger → IDA** — every pause (single-step, step over/into, run-to-return,
+  a breakpoint hit, *goto*, the end of a trace, …) moves IDA's cursor to the same
+  instruction and highlights the line. Because cutegdb reports one pause per
+  action — at the final instruction — IDA does not flicker through the
+  intermediate steps of a synthesized step-over or run-to-return. Breakpoints set
+  in cutegdb are marked at their address in IDA (best-effort colour; ret-sync has
+  no dedicated debugger→IDA breakpoint marker).
+- **IDA → debugger** — ret-sync's debugger hotkeys drive cutegdb back:
+
+  | IDA hotkey | Action in cutegdb |
+  |---|---|
+  | F10 | single-step |
+  | F11 | single-trace (step) |
+  | Alt-F5 | continue |
+  | F2 / F3 | breakpoint / one-shot breakpoint at the cursor |
+  | Ctrl-F2 | hardware breakpoint at the cursor |
+
+  These arrive as ordinary GDB commands and run through the normal command path,
+  so cutegdb's views refresh and the resulting location syncs straight back.
+
+### Rebasing and remote IDA
+
+cutegdb sends the module's runtime base and the absolute program counter; IDA
+rebases with its own image base, so ASLR/PIE and shared libraries are handled
+without any manual offset. The dispatcher endpoint defaults to `127.0.0.1:9100`.
+For an IDA on another machine, or a non-default port, point cutegdb at it with
+either:
+
+- the `CUTEGDB_RETSYNC` environment variable — `host` or `host:port`, e.g.
+  `CUTEGDB_RETSYNC=192.168.1.20:9100 cargo run`; or
+- a `~/.sync` file (the same one ret-sync reads):
+
+  ```ini
+  [INTERFACE]
+  host=192.168.1.20
+  port=9100
+  ```
+
+The endpoint is read when gdb starts, so set it before launching cutegdb. The
+current sync target and count are shown in **Plugins → Plugin status…**.
+
+> The reverse channel runs the GDB commands IDA sends, so only enable the plugin
+> with a dispatcher you trust (localhost, or a host you configured).
+
+## 9. Examples
 
 [`examples/`](../examples/) contains one small program per technique. Build and
 run them:
@@ -140,7 +206,7 @@ Then open the same binary in cutegdb, enable the matching plugin, and press F9 �
 the Log shows the checks turning `clean`. See [`examples/README.md`](../examples/README.md)
 for the full table.
 
-## 9. Testing
+## 10. Testing
 
 ```sh
 cargo test -p cutegdb-mi -p cutegdb-core -p cutegdb-cmd   # unit + integration (needs gdb, gcc)

@@ -109,7 +109,64 @@ cutegdb 采用 x64dbg 的默认快捷键，最常用的有：
 - 默认不跟随 fork 子进程，因此从子进程发起的检测不在覆盖范围内。
 - 两个尽力而为的插件在菜单中标有 ⚠，并会在日志中记录未能完全隐藏的部分。
 
-## 8. 示例
+## 8. IDA Pro 同步（ret-sync）
+
+**IDA Pro 同步** 插件让正在运行的 IDA Pro 会话与调试器保持一致。它是一个
+[ret-sync](https://github.com/bootleg/ret-sync) *调试器客户端*，因此直接与 **官方 ret-sync
+IDA 插件** 通信——IDA 一侧无需安装任何额外东西，本地或远程 IDA 使用同一个 dispatcher。
+
+### 配置步骤
+
+1. 在 IDA 中照常安装 ret-sync，并打开目标的 IDB。启动它（Alt-Shift-S）并启用同步
+   （Ctrl-Shift-S），使其 dispatcher 处于监听状态。IDA 通过模块的文件名将调试器匹配到
+   对应的 IDB；若 IDB 名称不同，可使用 ret-sync 的 *Overwrite idb name* 或 `.sync` 的
+   `[ALIASES]`。
+2. 在 cutegdb 中勾选 **Plugins（插件）→ Debugger integration（调试器集成）→ IDA Pro
+   sync**。该选择会被保存，并在下次启动时自动启用。
+3. 加载并运行目标。一旦暂停，IDA 的光标就会跳到当前指令。
+
+### 同步内容
+
+- **调试器 → IDA** —— 每次暂停（单步、步入/步过、执行到返回、命中断点、跳转、跟踪结束……）
+  都会把 IDA 光标移动到同一条指令并高亮当前行。由于 cutegdb 每个操作只在最终指令处上报一次
+  暂停，IDA 不会在步过或执行到返回的中间步骤间闪烁。在 cutegdb 中设置的断点会在 IDA 中于其
+  地址处标记（尽力而为的着色；ret-sync 没有专门的调试器→IDA 断点标记）。
+- **IDA → 调试器** —— ret-sync 在 IDA 中的调试快捷键可反向驱动 cutegdb：
+
+  | IDA 快捷键 | 在 cutegdb 中的动作 |
+  |---|---|
+  | F10 | 单步 |
+  | F11 | 单步跟踪 |
+  | Alt-F5 | 继续 |
+  | F2 / F3 | 在光标处设置断点 / 一次性断点 |
+  | Ctrl-F2 | 在光标处设置硬件断点 |
+
+  它们以普通 GDB 命令的形式到达并走正常命令路径，因此 cutegdb 的视图会刷新，产生的新位置
+  也会立即同步回 IDA。
+
+### 重定位与远程 IDA
+
+cutegdb 发送模块的运行时基址与绝对程序计数器；IDA 用自己的镜像基址重定位，因此 ASLR/PIE
+与共享库都无需手动计算偏移即可工作。dispatcher 端点默认为 `127.0.0.1:9100`。若 IDA 在另一台
+机器上或使用非默认端口，可用以下任一方式指向它：
+
+- 环境变量 `CUTEGDB_RETSYNC` —— 形如 `host` 或 `host:port`，例如
+  `CUTEGDB_RETSYNC=192.168.1.20:9100 cargo run`；或
+- 一个 `~/.sync` 文件（与 ret-sync 读取的是同一个）：
+
+  ```ini
+  [INTERFACE]
+  host=192.168.1.20
+  port=9100
+  ```
+
+该端点在 gdb 启动时读取，因此请在启动 cutegdb 之前设置。当前同步目标与次数可在
+**Plugins（插件）→ Plugin status…** 中查看。
+
+> 反向通道会执行 IDA 发来的 GDB 命令，因此请只在可信的 dispatcher（本机，或你自己配置的
+> 主机）下启用该插件。
+
+## 9. 示例
 
 [`examples/`](../examples/) 中每种技术对应一个小程序。构建并运行：
 
@@ -121,7 +178,7 @@ cd examples && make
 随后在 cutegdb 中打开同一个二进制文件，启用对应插件并按 F9——日志会显示这些检测变为
 `clean`。完整对照表见 [`examples/README.md`](../examples/README.md)。
 
-## 9. 测试
+## 10. 测试
 
 ```sh
 cargo test -p cutegdb-mi -p cutegdb-core -p cutegdb-cmd   # 单元 + 集成（需要 gdb、gcc）

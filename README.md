@@ -31,6 +31,9 @@ drives GDB/MI underneath so it debugs everything GDB does — and adds built-in
 - **Dual command bar** — type x64dbg commands (translated to GDB) or raw GDB
   commands; a dropdown switches to a Python line.
 - **Anti-anti-debug / anti-anti-VM plugins** — see below.
+- **IDA Pro sync** — a [ret-sync](https://github.com/bootleg/ret-sync)-compatible
+  plugin that mirrors the debugger into a live IDA Pro (cursor, highlight and
+  breakpoints), and lets IDA's hotkeys drive the debugger back.
 
 ## Anti-anti-debugging & anti-anti-VM
 
@@ -58,6 +61,28 @@ example runs with **CPUID spoof** enabled — the plugin clears the hypervisor
 markers and every check reports `clean`:
 
 ![The Log tab showing the anti-VM CPUID example reporting clean with the CPUID-spoof plugin active](docs/images/plugins-log.png)
+
+## IDA Pro sync
+
+When you are studying the same binary in both cutegdb and IDA Pro, the **IDA Pro
+sync** plugin keeps them in step. It speaks the [ret-sync](https://github.com/bootleg/ret-sync)
+protocol, so it drives the **stock ret-sync IDA plugin** — you install nothing
+extra on the IDA side.
+
+- **Debugger → IDA** — every time cutegdb pauses (single-step, step over/into,
+  run-to-return, a breakpoint hit, *goto*, trace end, …) IDA jumps to the same
+  instruction and highlights it. A synthesized step-over or run-to-return syncs
+  once, at the final instruction, so IDA never flickers through the intermediate
+  steps. Breakpoints you set in cutegdb are marked in IDA too.
+- **IDA → debugger** — ret-sync's hotkeys in IDA drive cutegdb back: step (F10),
+  trace (F11), continue (Alt-F5), and set/one-shot/hardware breakpoints at the
+  cursor (F2 / F3 / Ctrl-F2).
+
+Addresses are rebased automatically on IDA's side, so ASLR/PIE and shared
+libraries just work. Enable it from **Plugins → Debugger integration → IDA Pro
+sync**; the choice is remembered across sessions. IDA on another machine (or a
+non-default port) is configured with `~/.sync` or the `CUTEGDB_RETSYNC`
+environment variable — see the [usage guide](docs/usage.md#8-ida-pro-sync-ret-sync).
 
 ## Requirements
 

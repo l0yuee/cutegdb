@@ -11,6 +11,9 @@ pub enum PluginCategory {
     AntiDebug,
     /// Makes a virtual machine or sandbox look like bare metal.
     AntiVm,
+    /// Connects the debugger to an external analysis tool. These run in the
+    /// front-end rather than in gdb's Python, so they need no inferior.
+    Integration,
 }
 
 impl PluginCategory {
@@ -18,6 +21,7 @@ impl PluginCategory {
         match self {
             PluginCategory::AntiDebug => "Anti-anti-debug",
             PluginCategory::AntiVm => "Anti-anti-VM",
+            PluginCategory::Integration => "Debugger integration",
         }
     }
 }
@@ -34,7 +38,7 @@ pub struct PluginInfo {
 
 /// Every built-in plugin, in display order. The source of truth for the UI.
 pub fn catalog() -> &'static [PluginInfo] {
-    use PluginCategory::{AntiDebug, AntiVm};
+    use PluginCategory::{AntiDebug, AntiVm, Integration};
     &[
         PluginInfo {
             id: "ptrace_guard",
@@ -91,6 +95,16 @@ pub fn catalog() -> &'static [PluginInfo] {
             best_effort: false,
             description: "Normalizes uname, the hostname and the reported memory size so an \
                           analysis VM looks like an ordinary workstation.",
+        },
+        // Handled in the front-end (see `ida_sync.rs`), not in `plugins.py`.
+        PluginInfo {
+            id: "ida_sync",
+            name: "IDA Pro sync",
+            category: Integration,
+            best_effort: false,
+            description: "Mirrors the debugger into a ret-sync-compatible IDA Pro: each pause moves \
+                          and highlights IDA's cursor, and IDA's hotkeys drive the debugger back. \
+                          Set the dispatcher host/port in ~/.sync or CUTEGDB_RETSYNC for a remote IDA.",
         },
     ]
 }

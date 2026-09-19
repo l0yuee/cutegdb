@@ -7,6 +7,7 @@ use crate::pty::InferiorTty;
 use crate::registers::{RegValue, Register, parse_value};
 use crate::assembler::assemble;
 use crate::breakpoints::{Breakpoint, BreakpointKind, WatchAccess, parse_breakpoint, parse_breakpoint_table};
+use crate::ida_sync::{RetSyncClient, RetSyncConfig};
 use crate::database::{Database, ModuleAddress, Patch, database_path, export_patched_file};
 use crate::disasm::Reference;
 use crate::search::{Pattern, StringReference, find_strings};
@@ -159,6 +160,8 @@ pub struct Debugger {
     stops: watch::Sender<u64>,
     cancel: AtomicBool,
     tty: InferiorTty,
+    /// ret-sync client that mirrors pauses to IDA Pro (the "IDA Pro sync" plugin).
+    ida_sync: Arc<RetSyncClient>,
 }
 
 impl Debugger {
@@ -171,6 +174,7 @@ impl Debugger {
         // Like x64dbg's call stack, show the C runtime frames that call main.
         gdb.execute_quiet("-gdb-set backtrace past-main on").await?;
 
+        let (ida_sync, mut ida_inbound) = RetSyncClient::new(RetSyncConfig::load());
         let debugger = Arc::new(Self {
             gdb: Arc::new(gdb),
             inner: Mutex::default(),
@@ -178,8 +182,24 @@ impl Debugger {
             stops: watch::Sender::new(0),
             cancel: AtomicBool::new(false),
             tty,
+            ida_sync,
         });
         tokio::spawn(event_loop(Arc::downgrade(&debugger), mi_events));
+        // Run commands IDA sends back (step, breakpoints, …) as gdb console
+        // commands, so they drive the debugger and refresh its views normally.
+        tokio::spawn({
+            let weak = Arc::downgrade(&debugger);
+            async move {
+                while let Some(command) = ida_inbound.recv().await {
+                    let Some(debugger) = weak.upgrade() else { return };
+                    if command == "syncoff" {
+                        debugger.set_ida_sync(false);
+                    } else {
+                        let _ = debugger.execute_user_command(&command).await;
+                    }
+                }
+            }
+        });
         tokio::spawn(async move {
             let mut lines = LineBuffer::default();
             while let Some(chunk) = output_rx.recv().await {
@@ -557,6 +577,7 @@ impl Debugger {
         let number = self.store_reported_breakpoint(&r.results)?;
         let shown = self.arch().unwrap_or(Arch::X86_64).format_address(address);
         self.log(format!("{} at {shown} set!", if hardware { "Hardware breakpoint" } else { "Breakpoint" }));
+        self.mark_breakpoint_in_ida(address);
         Ok(number)
     }
 
@@ -1095,8 +1116,11 @@ impl Debugger {
     /// removing any others. Call it again after each process starts, since a plugin's breakpoints
     /// are bound to the inferior's addresses.
     pub async fn set_active_plugins(&self, ids: &[String]) -> Result<()> {
+        // The IDA Pro sync plugin runs in the front-end, not in gdb's Python.
+        self.set_ida_sync(ids.iter().any(|id| id == "ida_sync"));
+        let gdb_ids: Vec<String> = ids.iter().filter(|id| id.as_str() != "ida_sync").cloned().collect();
         self.ensure_plugins().await?;
-        let output = self.gdb.console_quiet(&crate::plugins::activate_command(ids)).await?;
+        let output = self.gdb.console_quiet(&crate::plugins::activate_command(&gdb_ids)).await?;
         let active = crate::plugins::parse_active(&output);
         if active.is_empty() {
             self.log("Countermeasures: none active");
@@ -1110,11 +1134,16 @@ impl Debugger {
 
     /// How many checks each active plugin has neutralized so far, for the status view.
     pub async fn plugin_stats(&self) -> Result<Vec<(String, u64)>> {
-        if !self.inner.lock().unwrap().plugins_ready {
-            return Ok(Vec::new());
+        let mut stats = if self.inner.lock().unwrap().plugins_ready {
+            let output = self.gdb.console_quiet(crate::plugins::STATS_COMMAND).await?;
+            crate::plugins::parse_stats(&output)
+        } else {
+            Vec::new()
+        };
+        if self.ida_sync.is_enabled() {
+            stats.push(("ida_sync".to_owned(), self.ida_sync.count()));
         }
-        let output = self.gdb.console_quiet(crate::plugins::STATS_COMMAND).await?;
-        Ok(crate::plugins::parse_stats(&output))
+        Ok(stats)
     }
 
     fn require_paused(&self) -> Result<()> {
@@ -1137,7 +1166,39 @@ impl Debugger {
     }
 
     fn emit(&self, event: DebugEvent) {
+        // Mirror every user-visible pause to IDA. This is the single choke point
+        // for the coalesced final-PC pause, so step loops sync once, not per step.
+        if let DebugEvent::Paused(snapshot) = &event
+            && self.ida_sync.is_enabled()
+        {
+            let symbols = self.symbols();
+            if let Some(module) = symbols.module_at(snapshot.pc) {
+                self.ida_sync.on_pause(&module.path, module.base, snapshot.pc);
+            }
+        }
         let _ = self.events.send(event);
+    }
+
+    /// Enables or disables the IDA Pro sync (the front-end "IDA Pro sync" plugin).
+    pub fn set_ida_sync(&self, enabled: bool) {
+        if self.ida_sync.set_enabled(enabled) {
+            if enabled {
+                self.log(format!("IDA Pro sync: connecting to {}", self.ida_sync.endpoint()));
+            } else {
+                self.log("IDA Pro sync: disconnected");
+            }
+        }
+    }
+
+    /// Marks a breakpoint address in IDA, if sync is on and the address is in a module.
+    fn mark_breakpoint_in_ida(&self, address: u64) {
+        if !self.ida_sync.is_enabled() {
+            return;
+        }
+        let symbols = self.symbols();
+        if let Some(module) = symbols.module_at(address) {
+            self.ida_sync.on_breakpoint(module.base, address);
+        }
     }
 
     fn log(&self, text: impl Into<String>) {

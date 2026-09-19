@@ -675,6 +675,11 @@ impl qobject::DebugSession {
                 obj.as_mut().log_message(QString::from(version.as_str()));
                 obj.gdb_ready(QString::from(version.as_str()));
             });
+            // The IDA Pro sync plugin needs no inferior, so connect as soon as gdb
+            // is up; the anti-* plugins are applied later, once a process is stopped.
+            if enabled_plugins.lock().unwrap().iter().any(|id| id == "ida_sync") {
+                debugger.set_ida_sync(true);
+            }
             while let Some(event) = events.recv().await {
                 match &event {
                     DebugEvent::Paused(snapshot) => {
@@ -1515,6 +1520,7 @@ impl qobject::DebugSession {
                 category: match p.category {
                     PluginCategory::AntiDebug => 0,
                     PluginCategory::AntiVm => 1,
+                    PluginCategory::Integration => 2,
                 },
                 best_effort: p.best_effort,
                 description: p.description.to_owned(),
@@ -1525,12 +1531,14 @@ impl qobject::DebugSession {
     fn set_enabled_plugins(self: Pin<&mut Self>, ids: &QString) {
         let ids: Vec<String> = ids.to_string().split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
         *self.rust().enabled_plugins.lock().unwrap() = ids.clone();
-        // Apply immediately when a process is already stopped; otherwise it happens at the next start.
+        let Some(debugger) = self.rust().debugger.clone() else { return };
+        // The IDA Pro sync client runs in-process; toggle it now, even with no target.
+        debugger.set_ida_sync(ids.iter().any(|id| id == "ida_sync"));
+        // The gdb-python countermeasures need an inferior: apply now when a process
+        // is stopped, otherwise they are (re)applied when the next process starts.
         let live = self.debug_state() != state_code(DebugState::NoTarget)
             && self.debug_state() != state_code(DebugState::Terminated);
-        if live
-            && let Some(debugger) = self.rust().debugger.clone()
-        {
+        if live {
             let thread = self.qt_thread();
             self.rust().runtime.spawn(async move {
                 if let Err(e) = debugger.set_active_plugins(&ids).await {
