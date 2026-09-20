@@ -20,7 +20,7 @@ pub enum AsmError {
 /// `resolve` maps symbol names such as `hello.add` to addresses.
 pub fn assemble(arch: Arch, text: &str, address: u64, resolve: &dyn Fn(&str) -> Option<u64>) -> Result<Vec<u8>, AsmError> {
     let statements: Vec<String> = text
-        .split(';')
+        .split([';', '\n'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| prepare_statement(arch, s, address, resolve))
@@ -80,7 +80,10 @@ fn gas_message(stderr: &str) -> String {
 }
 
 fn prepare_statement(arch: Arch, statement: &str, address: u64, resolve: &dyn Fn(&str) -> Option<u64>) -> Result<String, AsmError> {
-    if statement.contains(['\n', '.']) && statement.trim_start().starts_with('.') {
+    // Reject GAS directives (any line starting with '.'): they can read files (.incbin), emit
+    // arbitrary bytes (.byte/.fill) or loop (.rept). Input is split on ';' and newlines, so a
+    // directive smuggled onto a later line is caught here too, not just when the text starts with one.
+    if statement.contains('\n') || statement.trim_start().starts_with('.') {
         return Err(AsmError::Invalid("assembler directives are not allowed".into()));
     }
     let (mnemonic, operands) = match statement.split_once(char::is_whitespace) {
@@ -193,5 +196,7 @@ mod tests {
         assert!(matches!(asm(Arch::X86_64, "call unknown_function", 0), Err(AsmError::Invalid(_))));
         assert!(matches!(asm(Arch::X86_64, "  ", 0), Err(AsmError::Invalid(_))));
         assert!(matches!(asm(Arch::X86_64, ".incbin \"/etc/passwd\"", 0), Err(AsmError::Invalid(_))));
+        // A directive smuggled onto a second line must be rejected, not handed to the assembler.
+        assert!(matches!(asm(Arch::X86_64, "push rax\n.incbin \"/etc/passwd\"", 0), Err(AsmError::Invalid(_))));
     }
 }
