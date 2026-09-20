@@ -208,6 +208,11 @@ def arch_name():
         return "i386:x86-64"
 
 
+def _is_lp64():
+    """True for targets whose long/time_t are 64-bit (LP64)."""
+    return arch_name() in ("i386:x86-64", "aarch64")
+
+
 _ARG_REGS = {
     "i386:x86-64": ["rdi", "rsi", "rdx", "rcx", "r8", "r9"],
     "aarch64": ["x0", "x1", "x2", "x3", "x4", "x5"],
@@ -582,10 +587,15 @@ def _has_vm_token(data):
 def _scrub_tokens(data, tokens):
     out = data
     for token in tokens:
-        idx = out.lower().find(token)
+        # Match case-insensitively: the haystack is lower-cased, so the needle
+        # must be too, or a mixed-case token (e.g. the CPUID brand "QEMU") never
+        # matches. ASCII lower-casing preserves length, so the replacement stays
+        # length-preserving (the CPUID brand leaves are re-packed as 16 bytes).
+        needle = token.lower()
+        idx = out.lower().find(needle)
         while idx >= 0:
-            out = out[:idx] + b" " * len(token) + out[idx + len(token):]
-            idx = out.lower().find(token, idx + len(token))
+            out = out[:idx] + b" " * len(needle) + out[idx + len(needle):]
+            idx = out.lower().find(needle, idx + len(needle))
     return out
 
 
@@ -947,16 +957,21 @@ class TimingNormalizer(Plugin):
                             self.track(_AddrBP(addr + length, self, self._tick))
                             sites += 1
                         i = blob.find(opcode, i + 1)
+        # The clock hooks write 64-bit timespec/timeval fields, so install them
+        # only on LP64 targets; a 32-bit struct is smaller and would be overrun.
         seen = set()
-        for cls, name in ((_ClockGettimeHook, "clock_gettime"), (_ClockGettimeHook, "__clock_gettime"),
-                          (_GettimeofdayHook, "gettimeofday")):
-            addr = symbol_addr(name)
-            if addr is None or addr in seen:
-                continue
-            hook = cls(self, name)
-            if hook.install():
-                seen.add(addr)
-                self.track(hook)
+        if _is_lp64():
+            for cls, name in ((_ClockGettimeHook, "clock_gettime"), (_ClockGettimeHook, "__clock_gettime"),
+                              (_GettimeofdayHook, "gettimeofday")):
+                addr = symbol_addr(name)
+                if addr is None or addr in seen:
+                    continue
+                hook = cls(self, name)
+                if hook.install():
+                    seen.add(addr)
+                    self.track(hook)
+        else:
+            emit(self.id, "clock syscalls are virtualized on 64-bit targets only")
         emit(self.id, "virtualized time at %d rdtsc site(s); the target no longer sees real time" % sites)
 
     def _is(self, addr, mnem, length):
