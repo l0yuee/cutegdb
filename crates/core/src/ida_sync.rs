@@ -63,11 +63,25 @@ impl RetSyncConfig {
             .unwrap_or_default()
     }
 
-    /// Parses `host` or `host:port`; the port defaults to ret-sync's 9100.
+    /// Parses `host`, `host:port`, `[v6]` or `[v6]:port`; the port defaults to ret-sync's 9100.
     fn parse_endpoint(spec: &str) -> Option<Self> {
         let spec = spec.trim();
         if spec.is_empty() {
             return None;
+        }
+        // Bracketed IPv6, with an optional port: `[::1]` or `[::1]:9500`.
+        if let Some(rest) = spec.strip_prefix('[') {
+            let (host, after) = rest.split_once(']')?;
+            let port = match after.strip_prefix(':') {
+                Some(port) => port.trim().parse().ok()?,
+                None if after.is_empty() => 9100,
+                None => return None,
+            };
+            return Some(Self { host: host.trim().to_owned(), port });
+        }
+        // A bare IPv6 address has several colons and no port; keep it whole.
+        if spec.matches(':').count() > 1 {
+            return Some(Self { host: spec.to_owned(), ..Self::default() });
         }
         match spec.rsplit_once(':') {
             Some((host, port)) => Some(Self { host: host.trim().to_owned(), port: port.trim().parse().ok()? }),
@@ -435,6 +449,11 @@ mod tests {
         assert_eq!(RetSyncConfig::parse_endpoint("  "), None);
         // A non-numeric port is rejected.
         assert_eq!(RetSyncConfig::parse_endpoint("host:nope"), None);
+        // Bare IPv6 keeps the default port; brackets can carry one.
+        assert_eq!(RetSyncConfig::parse_endpoint("::1"), Some(RetSyncConfig { host: "::1".into(), port: 9100 }));
+        assert_eq!(RetSyncConfig::parse_endpoint("fe80::1"), Some(RetSyncConfig { host: "fe80::1".into(), port: 9100 }));
+        assert_eq!(RetSyncConfig::parse_endpoint("[::1]:9500"), Some(RetSyncConfig { host: "::1".into(), port: 9500 }));
+        assert_eq!(RetSyncConfig::parse_endpoint("[fe80::1]"), Some(RetSyncConfig { host: "fe80::1".into(), port: 9100 }));
     }
 
     #[test]
